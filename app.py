@@ -1,83 +1,69 @@
 import streamlit as st
 import cv2
+import mediapipe as mp
+import numpy as np
 import os
 import time
-import numpy as np
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-import io
-import face_recognition
 
-# Google Drive folder ID
-FOLDER_ID = "1blOQmXgEPzgbC1TV5tSlKh34xm0uwUz4"
+# Configurations
+TOTAL_IMAGES = 30
+CAPTURE_INTERVAL = 2  # seconds
 
-# Load credentials from Streamlit Secrets
-service_account_info = st.secrets["gdrive_service"]
-creds = service_account.Credentials.from_service_account_info(
-    service_account_info,
-    scopes=["https://www.googleapis.com/auth/drive"]
-)
-drive_service = build("drive", "v3", credentials=creds)
+st.title("📸 Face Registration (Streamlit Cloud Compatible)")
+st.markdown("Enter your name and click start to capture 30 face images (1 every 2 seconds).")
 
-# Streamlit UI
-st.title("📸 Face Registration App")
-st.markdown("Captures face images and uploads to Google Drive.")
-
-name = st.text_input("Enter Name:")
-start_button = st.button("Start Capture")
+name = st.text_input("Enter your name:")
+start_button = st.button("Start Capturing")
 
 frame_placeholder = st.empty()
 counter_placeholder = st.empty()
 
-TOTAL_IMAGES = 30
-CAPTURE_INTERVAL = 2
+mp_face = mp.solutions.face_detection
+mp_draw = mp.solutions.drawing_utils
 
 if start_button and name.strip():
+    st.success(f"Starting face capture for '{name}'...")
 
-    st.success(f"Capturing face for {name}...")
+    folder_path = os.path.join("faces", name)
+    os.makedirs(folder_path, exist_ok=True)
 
     cap = cv2.VideoCapture(0)
     captured = 0
 
-    while captured < TOTAL_IMAGES:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Cannot access webcam")
-            break
+    with mp_face.FaceDetection(model_selection=0, min_detection_confidence=0.5) as face_detector:
+        while captured < TOTAL_IMAGES:
+            ret, frame = cap.read()
+            if not ret:
+                st.error("Unable to access webcam.")
+                break
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        face_locations = face_recognition.face_locations(rgb_frame)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = face_detector.process(rgb)
 
-        if face_locations:
-            top, right, bottom, left = face_locations[0]
-            face_crop = frame[top:bottom, left:right]
+            if results.detections:
+                det = results.detections[0]
+                bbox = det.location_data.relative_bounding_box
 
-            # Convert to bytes
-            _, buffer = cv2.imencode(".jpg", face_crop)
-            img_bytes = io.BytesIO(buffer.tobytes())
+                h, w, _ = frame.shape
+                x = int(bbox.xmin * w)
+                y = int(bbox.ymin * h)
+                bw = int(bbox.width * w)
+                bh = int(bbox.height * h)
 
-            # Upload to Drive
-            file_metadata = {
-                "name": f"{name}_{captured+1}.jpg",
-                "parents": [FOLDER_ID]
-            }
-            media = MediaIoBaseUpload(img_bytes, mimetype="image/jpeg")
+                face_crop = frame[y:y+bh, x:x+bw]
+                if face_crop.size > 0:
+                    img_filename = f"{name}_{captured + 1}.jpg"
+                    img_path = os.path.join(folder_path, img_filename)
+                    cv2.imwrite(img_path, face_crop)
 
-            uploaded = drive_service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields="id"
-            ).execute()
+                    captured += 1
+                    counter_placeholder.markdown(f"**Captured {captured}/{TOTAL_IMAGES} images**")
 
-            # Draw rectangle for display
-            cv2.rectangle(rgb_frame, (left, top), (right, bottom), (0,255,0), 2)
+                cv2.rectangle(rgb, (x, y), (x + bw, y + bh), (0, 255, 0), 2)
 
-            captured += 1
-            counter_placeholder.markdown(f"**Captured {captured}/{TOTAL_IMAGES} images**")
+            frame_placeholder.image(rgb, channels="RGB")
 
-        frame_placeholder.image(rgb_frame, channels="RGB")
-        time.sleep(CAPTURE_INTERVAL)
+            time.sleep(CAPTURE_INTERVAL)
 
     cap.release()
-    st.success("✅ Capture completed! Images uploaded to Google Drive.")
+    st.success(f"✅ Done! All images saved to `faces/{name}/`")
