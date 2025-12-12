@@ -1,6 +1,6 @@
 streamlit
 opencv-python-headless
-face_recognition
+mediapipe
 numpy
 google-auth
 google-auth-oauthlib
